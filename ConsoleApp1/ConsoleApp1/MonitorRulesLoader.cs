@@ -95,12 +95,12 @@ internal static class MonitorRulesLoader
 
     private static void LogFriendlyConfig(Action<string>? log, string[] dialog, string[] buttons)
     {
-        string dialogPreview = string.Join(", ", dialog.Take(5));
-        string buttonPreview = string.Join(" > ", buttons.Take(5));
+        string dialogAll = string.Join(", ", dialog);
+        string buttonAll = string.Join(" > ", buttons);
 
         log?.Invoke($"Config loaded from: {ConfigPath}");
-        log?.Invoke($"Dialog keywords: {dialog.Length} items (e.g. {dialogPreview})");
-        log?.Invoke($"Button priority: {buttons.Length} items (top: {buttonPreview})");
+        log?.Invoke($"Dialog keywords: {dialog.Length} items (all: {dialogAll})");
+        log?.Invoke($"Button priority: {buttons.Length} items (all: {buttonAll})");
     }
 
     private static void WriteDefaultConfigFile()

@@ -12,9 +12,10 @@ internal sealed class RevitMonitorService
     private static readonly object LogLock = new();
 
     private readonly Action<string>? _uiLogger;
-    private readonly string[] _dialogKeywords;
-    private readonly string[] _buttonPriority;
+    private string[] _dialogKeywords;
+    private string[] _buttonPriority;
     private DateTime _lastNoProcessLog = DateTime.MinValue;
+    private DateTime _lastUnhandledDialogLog = DateTime.MinValue;
 
     public RevitMonitorService(Action<string>? uiLogger = null)
     {
@@ -22,43 +23,104 @@ internal sealed class RevitMonitorService
         (_dialogKeywords, _buttonPriority) = MonitorRulesLoader.Load(Log);
     }
 
+    public void ReloadRules()
+    {
+        var (dialogKeywords, buttonPriority) = MonitorRulesLoader.Load(Log);
+        _dialogKeywords = dialogKeywords;
+        _buttonPriority = buttonPriority;
+        Log("Monitor rules hot-reloaded.");
+    }
+
     public Task RunAsync(string processName, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
         {
             Log($"Start monitoring process: {processName}");
+            AutomationEventHandler? windowOpenedHandler = null;
 
-            while (!cancellationToken.IsCancellationRequested)
+            try
             {
-                try
+                // Event-based fallback: catch windows immediately when they are created.
+                windowOpenedHandler = (sender, eventArgs) =>
                 {
-                    var revitProcesses = Process.GetProcessesByName(processName)
-                        .Where(p => !p.HasExited)
-                        .ToArray();
-
-                    if (revitProcesses.Length == 0)
+                    try
                     {
-                        if ((DateTime.Now - _lastNoProcessLog).TotalSeconds >= 10)
+                        if (eventArgs is not AutomationEventArgs openedArgs ||
+                            openedArgs.EventId != WindowPattern.WindowOpenedEvent)
                         {
-                            Log($"No running process found: {processName}");
-                            _lastNoProcessLog = DateTime.Now;
+                            return;
+                        }
+
+                        if (_dialogKeywords.Length == 0)
+                        {
+                            return;
+                        }
+
+                        if (sender is not AutomationElement openedWindow)
+                        {
+                            return;
+                        }
+
+                        if (!IsTargetProcessWindow(openedWindow, processName))
+                        {
+                            return;
+                        }
+
+                        TryHandleSingleWindow(openedWindow, out _);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"WindowOpened handler error: {ex.Message}");
+                    }
+                };
+
+                Automation.AddAutomationEventHandler(
+                    WindowPattern.WindowOpenedEvent,
+                    AutomationElement.RootElement,
+                    TreeScope.Subtree,
+                    windowOpenedHandler);
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var revitProcesses = Process.GetProcessesByName(processName)
+                            .Where(p => !p.HasExited)
+                            .ToArray();
+
+                        if (revitProcesses.Length == 0)
+                        {
+                            if ((DateTime.Now - _lastNoProcessLog).TotalSeconds >= 10)
+                            {
+                                Log($"No running process found: {processName}");
+                                _lastNoProcessLog = DateTime.Now;
+                            }
+                        }
+
+                        foreach (var process in revitProcesses)
+                        {
+                            HandleRevitDialogs(process.Id);
                         }
                     }
-
-                    foreach (var process in revitProcesses)
+                    catch (Exception ex)
                     {
-                        HandleRevitDialogs(process.Id);
+                        Log($"Monitor error: {ex.Message}");
                     }
-                }
-                catch (Exception ex)
-                {
-                    Log($"Monitor error: {ex.Message}");
-                }
 
-                Thread.Sleep(500);
+                    cancellationToken.WaitHandle.WaitOne(500);
+                }
             }
-
-            Log("Monitor stopped.");
+            finally
+            {
+                if (windowOpenedHandler != null)
+                {
+                    Automation.RemoveAutomationEventHandler(
+                        WindowPattern.WindowOpenedEvent,
+                        AutomationElement.RootElement,
+                        windowOpenedHandler);
+                }
+                Log("Monitor stopped.");
+            }
         }, cancellationToken);
     }
 
@@ -66,21 +128,65 @@ internal sealed class RevitMonitorService
     {
         var desktop = AutomationElement.RootElement;
         var windows = desktop.FindAll(
-            TreeScope.Children,
-            new PropertyCondition(AutomationElement.ProcessIdProperty, processId));
+            TreeScope.Descendants,
+            new AndCondition(
+                new PropertyCondition(AutomationElement.ProcessIdProperty, processId),
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window)));
 
         foreach (AutomationElement window in windows)
         {
-            string title = SafeName(window);
-            if (!ShouldHandleWindow(title, window, out string reason))
+            if (TryHandleSingleWindow(window, out string message))
             {
-                continue;
+                Log($"PID={processId} {message}");
             }
+        }
+    }
 
-            if (ClickBestButton(window, out string buttonName))
-            {
-                Log($"PID={processId} Dialog=\"{title}\" Reason=\"{reason}\" Click=\"{buttonName}\"");
-            }
+    private bool TryHandleSingleWindow(AutomationElement window, out string logMessage)
+    {
+        logMessage = "";
+        string title = SafeName(window);
+        if (!ShouldHandleWindow(title, window, out string reason))
+        {
+            return false;
+        }
+
+        if (ClickBestButton(window, out string buttonName, out string failureReason))
+        {
+            logMessage = $"Dialog=\"{title}\" Reason=\"{reason}\" Click=\"{buttonName}\"";
+            return true;
+        }
+
+        if ((DateTime.Now - _lastUnhandledDialogLog).TotalMilliseconds >= 1500)
+        {
+            Log($"Dialog not handled. Title=\"{title}\" Reason=\"{reason}\" Detail=\"{failureReason}\"");
+            _lastUnhandledDialogLog = DateTime.Now;
+        }
+
+        return false;
+    }
+
+    private static bool IsTargetProcessWindow(AutomationElement window, string processName)
+    {
+        int processId;
+        try
+        {
+            processId = window.Current.ProcessId;
+        }
+        catch
+        {
+            return false;
+        }
+
+        try
+        {
+            var process = Process.GetProcessById(processId);
+            return !process.HasExited &&
+                   process.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -112,10 +218,25 @@ internal sealed class RevitMonitorService
 
     private bool ClickBestButton(AutomationElement window, out string clickedButtonName)
     {
+        return ClickBestButton(window, out clickedButtonName, out _);
+    }
+
+    private bool ClickBestButton(AutomationElement window, out string clickedButtonName, out string failureReason)
+    {
         clickedButtonName = "";
+        failureReason = "";
         var buttons = window.FindAll(
             TreeScope.Descendants,
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+
+        if (buttons.Count == 0)
+        {
+            failureReason = "no buttons found in window";
+            return false;
+        }
+
+        var matchedButtonNames = new List<string>();
+        var invokeFailureReasons = new List<string>();
 
         foreach (string key in _buttonPriority)
         {
@@ -127,26 +248,107 @@ internal sealed class RevitMonitorService
                     continue;
                 }
 
-                if (button.TryGetCurrentPattern(InvokePattern.Pattern, out object pattern))
+                matchedButtonNames.Add(name.Length == 0 ? "<empty>" : name);
+
+                if (TryInvokeButton(button, out string invokedButtonName, out string invokeFailure))
                 {
-                    ((InvokePattern)pattern).Invoke();
-                    clickedButtonName = name;
+                    clickedButtonName = invokedButtonName;
                     return true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(invokeFailure))
+                {
+                    invokeFailureReasons.Add($"\"{(name.Length == 0 ? "<empty>" : name)}\": {invokeFailure}");
                 }
             }
         }
 
         foreach (AutomationElement button in buttons)
         {
-            if (button.TryGetCurrentPattern(InvokePattern.Pattern, out object pattern))
+            string name = SafeName(button);
+            if (TryInvokeButton(button, out string invokedButtonName, out string invokeFailure))
             {
-                clickedButtonName = SafeName(button);
-                ((InvokePattern)pattern).Invoke();
+                clickedButtonName = invokedButtonName;
                 return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(invokeFailure))
+            {
+                invokeFailureReasons.Add($"\"{(name.Length == 0 ? "<empty>" : name)}\": {invokeFailure}");
             }
         }
 
+        if (matchedButtonNames.Count == 0)
+        {
+            failureReason = "no button matched configured priority keywords";
+        }
+        else
+        {
+            failureReason = $"matched buttons: {string.Join(", ", matchedButtonNames)}";
+        }
+
+        if (invokeFailureReasons.Count > 0)
+        {
+            failureReason += $"; invoke failures: {string.Join(" | ", invokeFailureReasons.Distinct())}";
+        }
+
         return false;
+    }
+
+    private bool TryInvokeButton(AutomationElement button, out string buttonName)
+    {
+        return TryInvokeButton(button, out buttonName, out _);
+    }
+
+    private bool TryInvokeButton(AutomationElement button, out string buttonName, out string failureReason)
+    {
+        buttonName = SafeName(button);
+        failureReason = "";
+
+        bool isEnabled;
+        try
+        {
+            isEnabled = button.Current.IsEnabled;
+        }
+        catch
+        {
+            failureReason = "failed to read IsEnabled";
+            return false;
+        }
+
+        if (!isEnabled)
+        {
+            failureReason = "button disabled";
+            return false;
+        }
+
+        if (!button.TryGetCurrentPattern(InvokePattern.Pattern, out object pattern))
+        {
+            failureReason = "InvokePattern unavailable";
+            return false;
+        }
+
+        try
+        {
+            ((InvokePattern)pattern).Invoke();
+            return true;
+        }
+        catch (ElementNotEnabledException)
+        {
+            failureReason = "ElementNotEnabledException during invoke";
+            return false;
+        }
+        catch (InvalidOperationException ex)
+        {
+            failureReason = $"InvalidOperationException: {ex.Message}";
+            Log($"Skip invoke on button \"{buttonName}\": {ex.Message}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            failureReason = $"{ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
     }
 
     private static string GetDescendantText(AutomationElement root)
@@ -201,10 +403,32 @@ internal sealed class RevitMonitorService
     {
         string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
 
-        lock (LogLock)
+        try
         {
-            _uiLogger?.Invoke(line);
-            File.AppendAllText(LogPath, line + Environment.NewLine);
+            lock (LogLock)
+            {
+                try
+                {
+                    _uiLogger?.Invoke(line);
+                }
+                catch
+                {
+                    // Never let UI logging crash monitor thread.
+                }
+
+                try
+                {
+                    File.AppendAllText(LogPath, line + Environment.NewLine);
+                }
+                catch
+                {
+                    // Best-effort file logging only.
+                }
+            }
+        }
+        catch
+        {
+            // Swallow all logging failures to keep monitoring alive.
         }
     }
 }
