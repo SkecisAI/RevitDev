@@ -1,0 +1,97 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+x64/
+x86/
+Debug/
+Release/
+[Rr]eleases/
+
+# .NET / NuGet
+*.nupkg
+packages/
+.nuget/
+project.lock.json
+project.assets.json
+
+# Rider / JetBrains
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+
+# ReSharper
+_ReSharper*/
+*.DotSettings.user
+
+# Test results
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# Logs
+*.log
+logs/
+*.tmp
+*.temp
+
+# Revit generated files
+*.0001.rvt
+*.0002.rvt
+*.0003.rvt
+*.0004.rvt
+*.rvt.*
+*.rfa.*
+*.rte.*
+*_backup.rvt
+*_backup.rfa
+
+# Revit local / central temp files
+*_local.rvt
+*_local.rfa
+*.slog
+*.dat
+
+# Revit journal files
+Journals/
+journal.*
+
+# Revit upgrade working folders
+input_2018/
+output_2024/
+Archive_Original*/
+Upgrade_Working*/
+Upgraded_Revit*/
+RevitUpgrade/logs/
+RevitUpgrade/input_2018/
+RevitUpgrade/output_2024/
+
+# Task / result runtime files
+current_task.json
+result.json
+heartbeat.txt
+timeout_results.log
+controller.log
+dialogs.log
+
+# Do NOT commit Revit API DLLs copied locally
+RevitAPI.dll
+RevitAPIUI.dll
+AdWindows.dll
+UIFramework.dll
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
