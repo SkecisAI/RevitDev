@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+
 namespace RevitUpgradeController;
 
 internal sealed class MonitorConfigJson
@@ -37,7 +38,10 @@ internal static class MonitorRulesLoader
             {
                 WriteDefaultConfigFile();
                 log?.Invoke($"Created default monitor_config.json at: {ConfigPath}");
-                return ((string[])DefaultDialogKeywords.Clone(), (string[])DefaultButtonPriority.Clone());
+                var defaultDialog = (string[])DefaultDialogKeywords.Clone();
+                var defaultButtons = (string[])DefaultButtonPriority.Clone();
+                LogFriendlyConfig(log, defaultDialog, defaultButtons);
+                return (defaultDialog, defaultButtons);
             }
 
             string json = File.ReadAllText(ConfigPath);
@@ -45,17 +49,24 @@ internal static class MonitorRulesLoader
             if (parsed == null)
             {
                 log?.Invoke("monitor_config.json could not be parsed, using built-in defaults.");
-                return ((string[])DefaultDialogKeywords.Clone(), (string[])DefaultButtonPriority.Clone());
+                var defaultDialog = (string[])DefaultDialogKeywords.Clone();
+                var defaultButtons = (string[])DefaultButtonPriority.Clone();
+                LogFriendlyConfig(log, defaultDialog, defaultButtons);
+                return (defaultDialog, defaultButtons);
             }
 
             var dialog = NormalizeArray(parsed.DialogKeywords, DefaultDialogKeywords, "DialogKeywords", log);
             var buttons = NormalizeArray(parsed.ButtonPriority, DefaultButtonPriority, "ButtonPriority", log);
+            LogFriendlyConfig(log, dialog, buttons);
             return (dialog, buttons);
         }
         catch (Exception ex)
         {
             log?.Invoke($"Failed to read monitor_config.json: {ex.Message}. Using built-in defaults.");
-            return ((string[])DefaultDialogKeywords.Clone(), (string[])DefaultButtonPriority.Clone());
+            var defaultDialog = (string[])DefaultDialogKeywords.Clone();
+            var defaultButtons = (string[])DefaultButtonPriority.Clone();
+            LogFriendlyConfig(log, defaultDialog, defaultButtons);
+            return (defaultDialog, defaultButtons);
         }
     }
 
@@ -80,6 +91,16 @@ internal static class MonitorRulesLoader
         }
 
         return cleaned;
+    }
+
+    private static void LogFriendlyConfig(Action<string>? log, string[] dialog, string[] buttons)
+    {
+        string dialogPreview = string.Join(", ", dialog.Take(5));
+        string buttonPreview = string.Join(" > ", buttons.Take(5));
+
+        log?.Invoke($"Config loaded from: {ConfigPath}");
+        log?.Invoke($"Dialog keywords: {dialog.Length} items (e.g. {dialogPreview})");
+        log?.Invoke($"Button priority: {buttons.Length} items (top: {buttonPreview})");
     }
 
     private static void WriteDefaultConfigFile()
