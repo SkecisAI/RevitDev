@@ -1,0 +1,22 @@
+{
+  "dialogKeywords": [
+    "Upgrade",
+    "Warning",
+    "Error",
+    "Failed",
+    "警告",
+    "错误",
+    "失败",
+    "缺失"
+  ],
+  "buttonPriority": [
+    "Continue",
+    "OK",
+    "Yes",
+    "继续",
+    "关闭",
+    "确定",
+    "Close",
+    "是"
+  ]
+}
